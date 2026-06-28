@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Claw Machine Escape</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #000; overflow: hidden; font-family: 'Segoe UI', Arial, sans-serif; touch-action: none; }
+  canvas { display: block; position: fixed; top: 0; left: 0; }
+
+  /* ── Joystick ── */
+  #joy-zone {
+    position: fixed; bottom: 28px; left: 28px;
+    width: 110px; height: 110px;
+    cursor: grab; z-index: 10;
+    user-select: none;
+  }
+  #joy-base {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.10);
+    border: 2px solid rgba(255,255,255,0.35);
+  }
+  #joy-stick {
+    position: absolute;
+    width: 46px; height: 46px;
+    top: 32px; left: 32px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.45);
+    border: 2px solid rgba(255,255,255,0.75);
+    pointer-events: none;
+    will-change: transform;
+  }
+
+  /* ── Overlay / Screens ── */
+  #fade {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0);
+    pointer-events: none;
+    transition: background 1.1s ease;
+    z-index: 20;
+  }
+  #fade.black { background: rgba(0,0,0,1); }
+
+  #screen {
+    display: none;
+    position: fixed; inset: 0;
+    align-items: center; justify-content: center; flex-direction: column;
+    z-index: 30; pointer-events: all;
+    background: rgba(0,0,0,0.82);
+  }
+  #screen.visible { display: flex; }
+
+  #screen h1 {
+    font-size: clamp(2rem, 6vw, 3.5rem);
+    font-weight: 900; letter-spacing: 2px;
+    color: #fff;
+    text-shadow: 0 0 30px #4af, 0 0 60px #4af;
+    margin-bottom: 12px;
+    text-align: center; padding: 0 16px;
+  }
+  #screen p {
+    font-size: clamp(0.9rem, 2.5vw, 1.2rem);
+    color: #aaddff;
+    margin-bottom: 36px;
+    text-align: center; padding: 0 24px;
+    line-height: 1.6;
+  }
+  #screen-btn {
+    padding: 14px 44px;
+    font-size: clamp(1rem, 2.5vw, 1.3rem);
+    font-weight: bold; letter-spacing: 1px;
+    background: #3af; border: none; border-radius: 10px;
+    color: #000; cursor: pointer;
+    box-shadow: 0 0 20px #3af8;
+    transition: transform .1s, background .1s;
+  }
+  #screen-btn:hover { background: #6cf; transform: scale(1.04); }
+  #screen-btn:active { transform: scale(0.97); }
+
+  /* ── HUD ── */
+  #hud {
+    position: fixed; top: 16px; left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255,255,255,0.55);
+    font-size: 13px; letter-spacing: 1px;
+    pointer-events: none; z-index: 10;
+    text-align: center;
+  }
+  #danger-bar {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: 5px;
+    background: #f33;
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.1s linear;
+    z-index: 15;
+  }
+</style>
+</head>
+<body>
+
+<div id="joy-zone">
+  <div id="joy-base"></div>
+  <div id="joy-stick"></div>
+</div>
+
+<div id="fade"></div>
+
+<div id="screen" class="visible">
+  <h1 id="s-title">CLAW MACHINE ESCAPE</h1>
+  <p id="s-sub">The claw is hunting you.<br>Run before it grabs you!</p>
+  <button id="screen-btn">PLAY</button>
+</div>
+
+<div id="hud">WASD / Arrow Keys &nbsp;|&nbsp; Joystick</div>
+<div id="danger-bar"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ════════════════════════════════════════════
+//  CONSTANTS
+// ════════════════════════════════════════════
+const BOX_W = 10, BOX_H = 10, BOX_D = 10;
+const HW = BOX_W / 2, HH = BOX_H / 2, HD = BOX_D / 2;
+
+const PLAYER_R       = 0.36;
+const PLAYER_BODY_H  = 0.72;
+// Y position of player's pivot (center of capsule) sitting on floor
+const FLOOR_Y        = -HH + PLAYER_R + PLAYER_BODY_H / 2 + 0.04;
+const PLAYER_BOUND   = HW - PLAYER_R - 0.18;
+
+const MAX_SPEED      = 2.6;    // units/sec
+const ACCEL          = 18;     // how fast we reach max speed
+const DECEL_TIME     = 1.0;    // seconds to decelerate to stop
+const STUMBLE_SPEED  = 4.2;    // lurch speed when stumbling
+const STUMBLE_DUR    = 0.28;   // lurch duration seconds
+
+const CLAW_H_SPEED   = 1.75;  // horizontal pursuit speed (units/sec)
+const CLAW_V_SPEED   = 3.8;   // descent speed
+const CLAW_HOVER_T   = 1.6;   // seconds claw waits above player before drop
+const CLAW_REST_Y    = HH;    // starting Y (at ceiling)
+const CLAW_ARM_LEN   = 2.6;
+// Y of claw arm tip — low enough to "grab" player
+const CLAW_GRAB_Y    = FLOOR_Y + PLAYER_BODY_H * 0.6;
+
+const CATCH_RADIUS   = 0.85;  // XZ distance for a catch
+
+// ════════════════════════════════════════════
+//  RENDERER / SCENE / CAMERA
+// ════════════════════════════════════════════
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+window.addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1020);
+scene.fog = new THREE.FogExp2(0x0d1020, 0.022);
+
+const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 8.5, 17);
+camera.lookAt(0, 0, 0);
+
+// ════════════════════════════════════════════
+//  LIGHTING
+// ════════════════════════════════════════════
+scene.add(new THREE.AmbientLight(0x223355, 1.8));
+
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(6, 14, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { near: 1, far: 50, left: -12, right: 12, top: 12, bottom: -12 });
+scene.add(sun);
+
+const fillLight = new THREE.PointLight(0x5599ff, 2.5, 20);
+fillLight.position.set(0, 2, 0);
+scene.add(fillLight);
+
+const topLight = new THREE.PointLight(0xffffff, 1.0, 12);
+topLight.position.set(0, HH - 0.5, 0);
+scene.add(topLight);
+
+// ════════════════════════════════════════════
+//  BOX — glass claw machine cabinet
+// ════════════════════════════════════════════
+const boxGroup = new THREE.Group();
+scene.add(boxGroup);
+
+// Glass panels
+const glassMat = new THREE.MeshPhysicalMaterial({
+  color: 0x99ccff,
+  transparent: true,
+  opacity: 0.10,
+  roughness: 0.05,
+  metalness: 0.0,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+  envMapIntensity: 0.8,
+});
+
+const boxGeo = new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D);
+const glassBox = new THREE.Mesh(boxGeo, glassMat);
+glassBox.renderOrder = 2;
+boxGroup.add(glassBox);
+
+// Crisp white edge lines (the iconic look)
+const edgesGeo = new THREE.EdgesGeometry(boxGeo);
+const edgeMat  = new THREE.LineBasicMaterial({ color: 0xffffff });
+boxGroup.add(new THREE.LineSegments(edgesGeo, edgeMat));
+
+// Corner posts
+const postMat = new THREE.MeshLambertMaterial({ color: 0xe0e0e0 });
+const postGeo = new THREE.CylinderGeometry(0.11, 0.11, BOX_H, 8);
+[[-HW, 0, -HD], [HW, 0, -HD], [-HW, 0, HD], [HW, 0, HD]].forEach(([x,y,z]) => {
+  const p = new THREE.Mesh(postGeo, postMat);
+  p.position.set(x, y, z);
+  boxGroup.add(p);
+});
+
+// Top frame bars
+const barMat = new THREE.MeshLambertMaterial({ color: 0xcccccc });
+const hBarGeo = new THREE.BoxGeometry(BOX_W, 0.12, 0.12);
+const dBarGeo = new THREE.BoxGeometry(0.12, 0.12, BOX_D);
+
+[[-HD], [HD]].forEach(([z]) => {
+  const b = new THREE.Mesh(hBarGeo, barMat);
+  b.position.set(0, HH, z);
+  boxGroup.add(b);
+});
+[[-HW], [HW]].forEach(([x]) => {
+  const b = new THREE.Mesh(dBarGeo, barMat);
+  b.position.set(x, HH, 0);
+  boxGroup.add(b);
+});
+
+// Floor
+const floorMat  = new THREE.MeshLambertMaterial({ color: 0x1a2a3a });
+const floorMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(BOX_W - 0.22, BOX_D - 0.22), floorMat
+);
+floorMesh.rotation.x = -Math.PI / 2;
+floorMesh.position.y = -HH + 0.01;
+floorMesh.receiveShadow = true;
+boxGroup.add(floorMesh);
+
+// ════════════════════════════════════════════
+//  CLAW SHADOW CIRCLE (floor indicator)
+// ════════════════════════════════════════════
+const shadowCircleMat = new THREE.MeshBasicMaterial({
+  color: 0xff0000,
+  transparent: true,
+  opacity: 0.0,
+  side: THREE.DoubleSide,
+});
+const shadowCircle = new THREE.Mesh(
+  new THREE.CircleGeometry(0.7, 24),
+  shadowCircleMat
+);
+shadowCircle.rotation.x = -Math.PI / 2;
+shadowCircle.position.y = -HH + 0.02;
+shadowCircle.renderOrder = 1;
+scene.add(shadowCircle);
+
+// ════════════════════════════════════════════
+//  PLAYER — capsule stuffed animal
+// ════════════════════════════════════════════
+const playerGroup = new THREE.Group();
+scene.add(playerGroup);
+playerGroup.position.set(2, FLOOR_Y, -2);
+
+const bodyMat  = new THREE.MeshLambertMaterial({ color: 0xf0a060 }); // warm orange
+const earMat   = new THREE.MeshLambertMaterial({ color: 0xe07040 });
+const noseMat  = new THREE.MeshLambertMaterial({ color: 0xcc4444 });
+const eyeMat   = new THREE.MeshLambertMaterial({ color: 0x111111 });
+
+// Body cylinder
+const bodyCyl = new THREE.Mesh(
+  new THREE.CylinderGeometry(PLAYER_R, PLAYER_R, PLAYER_BODY_H, 16),
+  bodyMat
+);
+bodyCyl.castShadow = true;
+playerGroup.add(bodyCyl);
+
+// Head sphere (top)
+const headSph = new THREE.Mesh(new THREE.SphereGeometry(PLAYER_R, 16, 16), bodyMat);
+headSph.position.y = PLAYER_BODY_H / 2;
+headSph.castShadow = true;
+playerGroup.add(headSph);
+
+// Bottom sphere
+const btmSph = new THREE.Mesh(new THREE.SphereGeometry(PLAYER_R, 16, 16), bodyMat);
+btmSph.position.y = -PLAYER_BODY_H / 2;
+btmSph.castShadow = true;
+playerGroup.add(btmSph);
+
+// Ears
+const earGeo = new THREE.SphereGeometry(0.13, 10, 10);
+[[-0.24, 1], [0.24, 1]].forEach(([ex]) => {
+  const ear = new THREE.Mesh(earGeo, earMat);
+  ear.position.set(ex, PLAYER_BODY_H / 2 + PLAYER_R * 1.05, 0.04);
+  ear.castShadow = true;
+  playerGroup.add(ear);
+});
+
+// Eyes
+const eyeGeo = new THREE.SphereGeometry(0.055, 8, 8);
+[[-0.15, 1], [0.15, 1]].forEach(([ex]) => {
+  const eye = new THREE.Mesh(eyeGeo, eyeMat);
+  eye.position.set(ex, PLAYER_BODY_H / 2 + PLAYER_R * 0.55, PLAYER_R * 0.92);
+  playerGroup.add(eye);
+});
+
+// Nose
+const nose = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 8), noseMat);
+nose.position.set(0, PLAYER_BODY_H / 2 + PLAYER_R * 0.30, PLAYER_R * 0.97);
+playerGroup.add(nose);
+
+// ════════════════════════════════════════════
+//  CLAW MECHANISM
+// ════════════════════════════════════════════
+const clawGroup = new THREE.Group();
+scene.add(clawGroup);
+clawGroup.position.set(-3, CLAW_REST_Y, -3);
+
+const clawMat    = new THREE.MeshLambertMaterial({ color: 0xaaaaaa });
+const clawRedMat = new THREE.MeshLambertMaterial({ color: 0xff3333 });
+
+// Housing block at top
+const housing = new THREE.Mesh(
+  new THREE.BoxGeometry(0.55, 0.28, 0.55),
+  new THREE.MeshLambertMaterial({ color: 0xbbbbcc })
+);
+clawGroup.add(housing);
+
+// Vertical arm
+const clawArm = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.065, 0.065, CLAW_ARM_LEN, 8),
+  clawMat
+);
+clawArm.position.y = -(CLAW_ARM_LEN / 2) - 0.14;
+clawGroup.add(clawArm);
+
+// Three claw fingers — pivot groups on the arm tip
+const NUM_FINGERS = 3;
+const fingerGroups = [];
+for (let i = 0; i < NUM_FINGERS; i++) {
+  const angle = (i / NUM_FINGERS) * Math.PI * 2;
+  const fg = new THREE.Group();
+  fg.rotation.y = angle;
+
+  // Upper segment
+  const upper = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.040, 0.055, 0.38, 6),
+    clawMat
+  );
+  upper.position.set(0.18, 0, 0);
+  upper.rotation.z = -Math.PI / 4;
+  fg.add(upper);
+
+  // Lower hook
+  const hook = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.030, 0.040, 0.26, 6),
+    clawMat
+  );
+  hook.position.set(0.30, -0.25, 0);
+  hook.rotation.z = -Math.PI / 2.2;
+  fg.add(hook);
+
+  clawArm.add(fg);
+  fingerGroups.push(fg);
+}
+
+// Horizontal rail line (visual guide showing where claw travels)
+const railMat2 = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.4 });
+const railPts  = [
+  new THREE.Vector3(-HW + 0.3, HH, 0),
+  new THREE.Vector3( HW - 0.3, HH, 0),
+];
+scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(railPts), railMat2));
+
+// ════════════════════════════════════════════
+//  INPUT — keyboard
+// ════════════════════════════════════════════
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code) && e.preventDefault(); });
+window.addEventListener('keyup',   e => { keys[e.code] = false; });
+
+// ════════════════════════════════════════════
+//  INPUT — joystick (touch + mouse drag)
+// ════════════════════════════════════════════
+const joyZone  = document.getElementById('joy-zone');
+const joyStick = document.getElementById('joy-stick');
+
+const JOY_RADIUS = 32;  // max stick displacement (px)
+const JOY_CTR    = 55;  // center of 110px zone
+
+let joyActive   = false;
+let joyInput    = { x: 0, y: 0 };  // normalized −1..1
+
+function joyDown(cx, cy) {
+  joyActive = true;
+  joyUpdate(cx, cy);
+}
+function joyUpdate(cx, cy) {
+  if (!joyActive) return;
+  const rect = joyZone.getBoundingClientRect();
+  const lx = cx - rect.left - JOY_CTR;
+  const ly = cy - rect.top  - JOY_CTR;
+  const len = Math.hypot(lx, ly);
+  const clamped = Math.min(len, JOY_RADIUS);
+  const nx = len > 0.5 ? lx / len : 0;
+  const ny = len > 0.5 ? ly / len : 0;
+  joyInput.x = nx * (clamped / JOY_RADIUS);
+  joyInput.y = ny * (clamped / JOY_RADIUS);
+  joyStick.style.transform = `translate(${nx * clamped}px, ${ny * clamped}px)`;
+}
+function joyUp() {
+  joyActive = false;
+  joyInput.x = 0; joyInput.y = 0;
+  joyStick.style.transform = '';
+}
+
+joyZone.addEventListener('mousedown',  e => { e.preventDefault(); joyDown(e.clientX, e.clientY); });
+window.addEventListener('mousemove',   e => joyUpdate(e.clientX, e.clientY));
+window.addEventListener('mouseup',     joyUp);
+joyZone.addEventListener('touchstart', e => { e.preventDefault(); joyDown(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+window.addEventListener('touchmove',   e => { const t = e.touches[0]; joyUpdate(t.clientX, t.clientY); }, { passive: true });
+window.addEventListener('touchend',    joyUp);
+
+// ════════════════════════════════════════════
+//  GAME STATE
+// ════════════════════════════════════════════
+// States: 'start' | 'playing' | 'dead'
+let gameState = 'start';
+
+// Player physics
+const vel         = new THREE.Vector3();
+const lastDir     = new THREE.Vector3();   // last non-zero movement direction
+let   decelTimer  = 0;                     // seconds since input stopped
+let   stumbling   = false;
+const stumbleVel  = new THREE.Vector3();
+let   stumbleT    = 0;
+let   walkCycle   = 0;
+
+// Claw AI
+// phases: 'seeking' | 'above' | 'descending' | 'returning'
+let clawPhase     = 'seeking';
+let clawWaitTimer = 0;
+let clawCurrentY  = CLAW_REST_Y;
+
+// UI refs
+const fadeEl    = document.getElementById('fade');
+const screenEl  = document.getElementById('screen');
+const titleEl   = document.getElementById('s-title');
+const subEl     = document.getElementById('s-sub');
+const btnEl     = document.getElementById('screen-btn');
+const dangerBar = document.getElementById('danger-bar');
+
+function showScreen(title, sub, btn) {
+  titleEl.textContent = title;
+  subEl.innerHTML = sub;
+  btnEl.textContent = btn;
+  screenEl.classList.add('visible');
+}
+function hideScreen() { screenEl.classList.remove('visible'); }
+
+function startGame() {
+  hideScreen();
+  fadeEl.classList.remove('black');
+  gameState = 'playing';
+
+  // Reset player
+  playerGroup.position.set(
+    (Math.random() - 0.5) * 5,
+    FLOOR_Y,
+    (Math.random() - 0.5) * 5
+  );
+  playerGroup.rotation.set(0, 0, 0);
+  vel.set(0, 0, 0);
+  lastDir.set(0, 0, 1);
+  decelTimer = 0; stumbling = false; walkCycle = 0;
+
+  // Reset claw to opposite side of player
+  const px = playerGroup.position.x;
+  const pz = playerGroup.position.z;
+  clawGroup.position.set(-px * 0.5 + (Math.random()-0.5)*3, CLAW_REST_Y, -pz * 0.5 + (Math.random()-0.5)*3);
+  clampClawXZ();
+  clawCurrentY  = CLAW_REST_Y;
+  clawPhase     = 'seeking';
+  clawWaitTimer = 0;
+
+  shadowCircleMat.opacity = 0;
+  dangerBar.style.transform = 'scaleX(0)';
+}
+
+btnEl.addEventListener('click', startGame);
+
+function triggerDeath() {
+  gameState = 'dead';
+  dangerBar.style.transform = 'scaleX(0)';
+  fadeEl.classList.add('black');
+  setTimeout(() => {
+    showScreen('CAUGHT!', 'The claw got you...<br>Better luck next time!', 'TRY AGAIN');
+  }, 1300);
+}
+
+// ════════════════════════════════════════════
+//  HELPERS
+// ════════════════════════════════════════════
+function getInputDir() {
+  let ix = 0, iz = 0;
+  if (keys['KeyW'] || keys['ArrowUp'])    iz -= 1;
+  if (keys['KeyS'] || keys['ArrowDown'])  iz += 1;
+  if (keys['KeyA'] || keys['ArrowLeft'])  ix -= 1;
+  if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
+
+  // add joystick
+  ix += joyInput.x;
+  iz += joyInput.y;
+
+  const len = Math.hypot(ix, iz);
+  if (len > 0.05) {
+    const s = Math.min(len, 1.0) / len;
+    return new THREE.Vector3(ix * s, 0, iz * s);
+  }
+  return new THREE.Vector3(0, 0, 0);
+}
+
+function lerpAngle(a, b, t) {
+  let d = b - a;
+  while (d >  Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * Math.min(t, 1);
+}
+
+function clampClawXZ() {
+  clawGroup.position.x = Math.max(-HW + 0.4, Math.min(HW - 0.4, clawGroup.position.x));
+  clawGroup.position.z = Math.max(-HD + 0.4, Math.min(HD - 0.4, clawGroup.position.z));
+}
+
+// ════════════════════════════════════════════
+//  UPDATE — PLAYER
+// ════════════════════════════════════════════
+function updatePlayer(dt) {
+  const input   = getInputDir();
+  const hasInput = input.length() > 0.05;
+
+  if (hasInput) {
+    // Detect direction reversal during deceleration → STUMBLE
+    if (decelTimer > 0 && vel.length() > 0.4) {
+      const dot = lastDir.dot(input);
+      if (dot < -0.2) {
+        // lurch in old direction
+        stumbleVel.copy(vel).normalize().multiplyScalar(STUMBLE_SPEED);
+        stumbleT  = STUMBLE_DUR;
+        stumbling = true;
+      }
+    }
+
+    const targetVel = input.clone().multiplyScalar(MAX_SPEED);
+    vel.lerp(targetVel, Math.min(dt * ACCEL, 1));
+    lastDir.copy(input);
+    decelTimer = 0;
+
+  } else {
+    // Decelerate to zero over DECEL_TIME seconds
+    decelTimer += dt;
+    const decayRate = dt / DECEL_TIME;
+    vel.multiplyScalar(Math.max(0, 1 - decayRate * 2.2));
+    if (vel.length() < 0.04) vel.set(0, 0, 0);
+  }
+
+  // Apply stumble impulse
+  if (stumbling) {
+    stumbleT -= dt;
+    if (stumbleT <= 0) { stumbling = false; }
+    else {
+      const blend = stumbleT / STUMBLE_DUR;
+      vel.addScaledVector(stumbleVel, dt * blend * 2);
+    }
+  }
+
+  // Integrate position
+  const pos = playerGroup.position;
+  pos.x += vel.x * dt;
+  pos.z += vel.z * dt;
+  pos.y  = FLOOR_Y;
+
+  // Wall clamp
+  pos.x = Math.max(-PLAYER_BOUND, Math.min(PLAYER_BOUND, pos.x));
+  pos.z = Math.max(-PLAYER_BOUND, Math.min(PLAYER_BOUND, pos.z));
+
+  // Face movement direction
+  const speed = vel.length();
+  if (speed > 0.1) {
+    const tAngle = Math.atan2(vel.x, vel.z);
+    playerGroup.rotation.y = lerpAngle(playerGroup.rotation.y, tAngle, dt * 12);
+  }
+
+  // Walk totter / bob
+  if (speed > 0.15) {
+    walkCycle += dt * speed * 3.5;
+    playerGroup.rotation.z = Math.sin(walkCycle) * 0.13;
+    playerGroup.position.y = FLOOR_Y + Math.abs(Math.sin(walkCycle * 2)) * 0.035;
+  } else {
+    playerGroup.rotation.z *= (1 - dt * 8);
+    playerGroup.position.y = FLOOR_Y;
+    if (stumbling) {
+      // flail animation when stumbling
+      playerGroup.rotation.z = Math.sin(Date.now() * 0.02) * 0.35;
+    }
+  }
+}
+
+// ════════════════════════════════════════════
+//  UPDATE — CLAW AI
+// ════════════════════════════════════════════
+function updateClaw(dt) {
+  const px = playerGroup.position.x;
+  const pz = playerGroup.position.z;
+  const cx = clawGroup.position.x;
+  const cz = clawGroup.position.z;
+
+  switch (clawPhase) {
+
+    case 'seeking': {
+      const dx   = px - cx;
+      const dz   = pz - cz;
+      const dist = Math.hypot(dx, dz);
+      shadowCircleMat.opacity = 0;
+      dangerBar.style.transform = 'scaleX(0)';
+
+      if (dist < 0.35) {
+        clawPhase     = 'above';
+        clawWaitTimer = CLAW_HOVER_T;
+      } else {
+        const spd = CLAW_H_SPEED;
+        clawGroup.position.x += (dx / dist) * spd * dt;
+        clawGroup.position.z += (dz / dist) * spd * dt;
+        clampClawXZ();
+      }
+      // Gentle arm swing while seeking
+      clawArm.rotation.x = Math.sin(Date.now() * 0.0012) * 0.04;
+      break;
+    }
+
+    case 'above': {
+      // Track player closely — lock above
+      clawGroup.position.x += (px - cx) * dt * 6;
+      clawGroup.position.z += (pz - cz) * dt * 6;
+      clampClawXZ();
+
+      clawWaitTimer -= dt;
+      const progress = 1 - (clawWaitTimer / CLAW_HOVER_T); // 0→1
+
+      // Red warning circle grows on floor
+      shadowCircleMat.opacity = 0.08 + progress * 0.22;
+      shadowCircle.position.x = clawGroup.position.x;
+      shadowCircle.position.z = clawGroup.position.z;
+
+      // Danger bar fills
+      dangerBar.style.transform = `scaleX(${progress})`;
+
+      // Fingers open/close rapidly as warning
+      fingerGroups.forEach((fg, i) => {
+        const pulse = Math.sin(Date.now() * 0.008 + i * 2.1) * 0.35 * progress;
+        fg.rotation.z = pulse;
+      });
+
+      if (clawWaitTimer <= 0) {
+        clawPhase = 'descending';
+        dangerBar.style.transform = 'scaleX(1)';
+      }
+      break;
+    }
+
+    case 'descending': {
+      clawCurrentY -= CLAW_V_SPEED * dt;
+      clawGroup.position.y = clawCurrentY;
+
+      // Fingers close as it descends
+      const descent = 1 - Math.max(0, (clawCurrentY - CLAW_GRAB_Y) / (CLAW_REST_Y - CLAW_GRAB_Y));
+      fingerGroups.forEach(fg => {
+        fg.rotation.z = -descent * 0.7;
+      });
+
+      // Update floor shadow
+      shadowCircle.position.x = clawGroup.position.x;
+      shadowCircle.position.z = clawGroup.position.z;
+      shadowCircleMat.opacity = 0.28 + descent * 0.12;
+      dangerBar.style.transform = 'scaleX(1)';
+
+      if (clawCurrentY <= CLAW_GRAB_Y) {
+        clawCurrentY = CLAW_GRAB_Y;
+        clawGroup.position.y = clawCurrentY;
+
+        // Check catch
+        const dx = playerGroup.position.x - clawGroup.position.x;
+        const dz = playerGroup.position.z - clawGroup.position.z;
+        if (Math.hypot(dx, dz) < CATCH_RADIUS) {
+          triggerDeath();
+          return;
+        }
+        clawPhase = 'returning';
+      }
+      break;
+    }
+
+    case 'returning': {
+      clawCurrentY += CLAW_V_SPEED * dt;
+      clawGroup.position.y = clawCurrentY;
+      dangerBar.style.transform = 'scaleX(0)';
+      shadowCircleMat.opacity *= (1 - dt * 4);
+
+      // Open fingers again as it returns
+      fingerGroups.forEach(fg => {
+        fg.rotation.z *= (1 - dt * 5);
+      });
+
+      if (clawCurrentY >= CLAW_REST_Y) {
+        clawCurrentY = CLAW_REST_Y;
+        clawGroup.position.y = clawCurrentY;
+        clawPhase = 'seeking';
+      }
+      break;
+    }
+  }
+}
+
+// ════════════════════════════════════════════
+//  MAIN LOOP
+// ════════════════════════════════════════════
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if (gameState === 'playing') {
+    updatePlayer(dt);
+    updateClaw(dt);
+  }
+
+  // Point light follows player subtly for warmth
+  if (gameState === 'playing') {
+    fillLight.position.x = playerGroup.position.x * 0.3;
+    fillLight.position.z = playerGroup.position.z * 0.3;
+  }
+
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>
