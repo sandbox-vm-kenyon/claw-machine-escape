@@ -288,41 +288,36 @@ const playerGroup = new THREE.Group();
 scene.add(playerGroup);
 playerGroup.position.set(2, FLOOR_Y, -2);
 
-const bodyMat  = new THREE.MeshLambertMaterial({ color: 0xf0a060 }); // warm orange
-const earMat   = new THREE.MeshLambertMaterial({ color: 0xe07040 });
-const noseMat  = new THREE.MeshLambertMaterial({ color: 0xcc4444 });
-const eyeMat   = new THREE.MeshLambertMaterial({ color: 0x111111 });
+const bodyMat = new THREE.MeshLambertMaterial({ color: 0xf0a060 }); // warm orange
+const earMat  = new THREE.MeshLambertMaterial({ color: 0xe07040 });
+const noseMat = new THREE.MeshLambertMaterial({ color: 0xcc4444 });
+const eyeMat  = new THREE.MeshLambertMaterial({ color: 0x111111 });
 
-// Body cylinder
-const bodyCyl = new THREE.Mesh(
-  new THREE.CylinderGeometry(PLAYER_R, PLAYER_R, PLAYER_BODY_H, 16),
+// True capsule body (CapsuleGeometry = cylinder + two hemispherical caps)
+// radius, cylindrical length, capSegments, radialSegments
+const capsule = new THREE.Mesh(
+  new THREE.CapsuleGeometry(PLAYER_R, PLAYER_BODY_H, 8, 16),
   bodyMat
 );
-bodyCyl.castShadow = true;
-playerGroup.add(bodyCyl);
+capsule.castShadow = true;
+playerGroup.add(capsule);
 
-// Head sphere (top)
-const headSph = new THREE.Mesh(new THREE.SphereGeometry(PLAYER_R, 16, 16), bodyMat);
-headSph.position.y = PLAYER_BODY_H / 2;
-headSph.castShadow = true;
-playerGroup.add(headSph);
+// ── Two sphere ears sitting on top of the capsule ──
+// Top of capsule = PLAYER_BODY_H/2 + PLAYER_R above the group origin
+const EAR_R    = 0.15;                              // ear radius
+const CAP_TOP  = PLAYER_BODY_H / 2 + PLAYER_R;     // y of capsule apex
+// Place ears so their bottom edge sits on top of the cap, spaced apart
+const EAR_Y    = CAP_TOP - EAR_R * 0.35;           // slightly embedded for stability
+const EAR_X    = PLAYER_R * 0.72;                   // lateral offset
 
-// Bottom sphere
-const btmSph = new THREE.Mesh(new THREE.SphereGeometry(PLAYER_R, 16, 16), bodyMat);
-btmSph.position.y = -PLAYER_BODY_H / 2;
-btmSph.castShadow = true;
-playerGroup.add(btmSph);
-
-// Ears
-const earGeo = new THREE.SphereGeometry(0.13, 10, 10);
-[[-0.24, 1], [0.24, 1]].forEach(([ex]) => {
-  const ear = new THREE.Mesh(earGeo, earMat);
-  ear.position.set(ex, PLAYER_BODY_H / 2 + PLAYER_R * 1.05, 0.04);
+[-EAR_X, EAR_X].forEach(ex => {
+  const ear = new THREE.Mesh(new THREE.SphereGeometry(EAR_R, 12, 12), earMat);
+  ear.position.set(ex, EAR_Y, 0);
   ear.castShadow = true;
   playerGroup.add(ear);
 });
 
-// Eyes
+// Eyes (on the upper cap of the capsule, facing +Z)
 const eyeGeo = new THREE.SphereGeometry(0.055, 8, 8);
 [[-0.15, 1], [0.15, 1]].forEach(([ex]) => {
   const eye = new THREE.Mesh(eyeGeo, eyeMat);
