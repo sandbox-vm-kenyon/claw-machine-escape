@@ -190,8 +190,11 @@ const DIFF_INTERVAL  = 15;
 const MAX_DIFF_LEVEL = 6;
 const CLAW_REST_Y    = HH;    // starting Y (at ceiling)
 const CLAW_ARM_LEN   = 2.6;
-// Y of claw arm tip — low enough to "grab" player
-const CLAW_GRAB_Y    = FLOOR_Y + PLAYER_BODY_H * 0.6;
+// Y offset from claw group origin down to the finger tips:
+//   arm mount gap (0.14) + arm half-length + hook tip depth (0.27)
+const CLAW_TIP_Y_OFFSET = -(CLAW_ARM_LEN + 0.41);
+// Group Y at which the tips reach the player's top (FLOOR_Y + capsule half + radius)
+const CLAW_GRAB_Y    = FLOOR_Y + PLAYER_BODY_H / 2 + PLAYER_R - CLAW_TIP_Y_OFFSET;
 
 const CATCH_RADIUS   = 0.85;  // XZ distance for a catch
 
@@ -831,11 +834,13 @@ function updateClaw(dt) {
       shadow1.mat.opacity = 0.28 + descent * 0.12;
       dangerBar.style.transform = 'scaleX(1)';
 
-      if (clawCurrentY <= CLAW_GRAB_Y) {
+      // Game over when tips (not base) reach the player's top
+      const tipY1 = clawCurrentY + CLAW_TIP_Y_OFFSET;
+      const playerTopY1 = playerGroup.position.y + PLAYER_BODY_H / 2 + PLAYER_R;
+      if (tipY1 <= playerTopY1) {
         clawCurrentY = CLAW_GRAB_Y;
         clawGroup.position.y = clawCurrentY;
 
-        // Check catch
         const dx = playerGroup.position.x - clawGroup.position.x;
         const dz = playerGroup.position.z - clawGroup.position.z;
         if (Math.hypot(dx, dz) < CATCH_RADIUS) {
@@ -931,7 +936,10 @@ function updateClaw2(dt) {
       shadow2.mesh.position.z = claw2.group.position.z;
       shadow2.mat.opacity = 0.28 + descent * 0.12;
 
-      if (c2Y <= CLAW_GRAB_Y) {
+      // Game over when tips (not base) reach the player's top
+      const tipY2 = c2Y + CLAW_TIP_Y_OFFSET;
+      const playerTopY2 = playerGroup.position.y + PLAYER_BODY_H / 2 + PLAYER_R;
+      if (tipY2 <= playerTopY2) {
         c2Y = CLAW_GRAB_Y;
         claw2.group.position.y = c2Y;
 
