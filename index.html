@@ -218,6 +218,8 @@ scene.fog = new THREE.FogExp2(0x0d1020, 0.022);
 const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 200);
 camera.position.set(0, 8.5, 17);
 camera.lookAt(0, 0, 0);
+// Fixed world-space offset from player — no direction dependency
+const CAM_OFFSET = new THREE.Vector3(0, 13, 14);
 
 // ════════════════════════════════════════════
 //  LIGHTING
@@ -982,6 +984,10 @@ function animate() {
     fillLight.position.x = playerGroup.position.x * 0.3;
     fillLight.position.z = playerGroup.position.z * 0.3;
   }
+
+  // Fixed-offset follow camera — position is always player + CAM_OFFSET in world space
+  camera.position.copy(playerGroup.position).add(CAM_OFFSET);
+  camera.lookAt(playerGroup.position.x, playerGroup.position.y + 0.5, playerGroup.position.z);
 
   renderer.render(scene, camera);
 }
