@@ -557,41 +557,57 @@ function clampClawXZ() {
 //  UPDATE — PLAYER
 // ════════════════════════════════════════════
 function updatePlayer(dt) {
-  const input   = getInputDir();
+  const input    = getInputDir();
   const hasInput = input.length() > 0.05;
+  const speed    = vel.length();
+  const isMoving = speed > 0.15;
 
-  if (hasInput) {
-    // Detect direction reversal during deceleration → STUMBLE
-    if (decelTimer > 0 && vel.length() > 0.4) {
-      const dot = lastDir.dot(input);
-      if (dot < -0.2) {
-        // lurch in old direction
-        stumbleVel.copy(vel).normalize().multiplyScalar(STUMBLE_SPEED);
-        stumbleT  = STUMBLE_DUR;
-        stumbling = true;
+  // While stumbling: ignore all directional input — player must ride out the fall
+  if (!stumbling) {
+    if (hasInput) {
+      if (isMoving) {
+        // Require full stop before changing direction.
+        // Compare new input against current velocity direction (not lastDir).
+        const movDir = vel.clone().normalize();
+        const dot    = movDir.dot(input);
+        if (dot < 0.7) {
+          // Significant direction change while still moving → fall in previous direction
+          stumbleVel.copy(movDir).multiplyScalar(STUMBLE_SPEED);
+          stumbleT  = STUMBLE_DUR;
+          stumbling = true;
+          // New direction is blocked — stumble overrides
+        } else {
+          // Continuing in roughly the same direction — accelerate normally
+          const targetVel = input.clone().multiplyScalar(MAX_SPEED);
+          vel.lerp(targetVel, Math.min(dt * ACCEL, 1));
+          lastDir.copy(input);
+          decelTimer = 0;
+        }
+      } else {
+        // Fully stopped (or nearly) — freely accept new direction
+        const targetVel = input.clone().multiplyScalar(MAX_SPEED);
+        vel.lerp(targetVel, Math.min(dt * ACCEL, 1));
+        lastDir.copy(input);
+        decelTimer = 0;
       }
+    } else {
+      // No input → decelerate to stop over DECEL_TIME seconds
+      decelTimer += dt;
+      const decayRate = dt / DECEL_TIME;
+      vel.multiplyScalar(Math.max(0, 1 - decayRate * 2.2));
+      if (vel.length() < 0.04) vel.set(0, 0, 0);
     }
-
-    const targetVel = input.clone().multiplyScalar(MAX_SPEED);
-    vel.lerp(targetVel, Math.min(dt * ACCEL, 1));
-    lastDir.copy(input);
-    decelTimer = 0;
-
-  } else {
-    // Decelerate to zero over DECEL_TIME seconds
-    decelTimer += dt;
-    const decayRate = dt / DECEL_TIME;
-    vel.multiplyScalar(Math.max(0, 1 - decayRate * 2.2));
-    if (vel.length() < 0.04) vel.set(0, 0, 0);
   }
 
-  // Apply stumble impulse
+  // Apply stumble physics — velocity driven by the lurch, fades to zero at end
   if (stumbling) {
     stumbleT -= dt;
-    if (stumbleT <= 0) { stumbling = false; }
-    else {
+    if (stumbleT <= 0) {
+      stumbling = false;
+      vel.set(0, 0, 0);   // come to a full stop after the fall
+    } else {
       const blend = stumbleT / STUMBLE_DUR;
-      vel.addScaledVector(stumbleVel, dt * blend * 2);
+      vel.copy(stumbleVel).multiplyScalar(blend);
     }
   }
 
@@ -605,16 +621,18 @@ function updatePlayer(dt) {
   pos.x = Math.max(-PLAYER_BOUND, Math.min(PLAYER_BOUND, pos.x));
   pos.z = Math.max(-PLAYER_BOUND, Math.min(PLAYER_BOUND, pos.z));
 
+  // Re-read speed after stumble may have changed vel
+  const curSpeed = vel.length();
+
   // Face movement direction
-  const speed = vel.length();
-  if (speed > 0.1) {
+  if (curSpeed > 0.1) {
     const tAngle = Math.atan2(vel.x, vel.z);
     playerGroup.rotation.y = lerpAngle(playerGroup.rotation.y, tAngle, dt * 12);
   }
 
   // Walk totter / bob
-  if (speed > 0.15) {
-    walkCycle += dt * speed * 3.5;
+  if (curSpeed > 0.15) {
+    walkCycle += dt * curSpeed * 3.5;
     playerGroup.rotation.z = Math.sin(walkCycle) * 0.13;
     playerGroup.position.y = FLOOR_Y + Math.abs(Math.sin(walkCycle * 2)) * 0.035;
   } else {
