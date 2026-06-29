@@ -675,8 +675,9 @@ function updatePlayer(dt) {
         // Compare new input against current velocity direction (not lastDir).
         const movDir = vel.clone().normalize();
         const dot    = movDir.dot(input);
-        if (dot < 0.7) {
+        if (dot < 0.85) {
           // Significant direction change while still moving → fall in previous direction
+          // 0.85 ≈ cos(32°) — catches 45° diagonal key additions/removals (cos 45° ≈ 0.707)
           stumbleVel.copy(movDir).multiplyScalar(STUMBLE_SPEED);
           stumbleT  = STUMBLE_DUR;
           stumbling = true;
