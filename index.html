@@ -416,6 +416,7 @@ function buildClaw(startX, startZ) {
     hook.rotation.z = -Math.PI / 2.2;
     fg.add(hook);
 
+    fg.position.y = -CLAW_ARM_LEN / 2;
     arm.add(fg);
     fingers.push(fg);
   }
