@@ -175,6 +175,7 @@ const DECEL_TIME     = 1.0;    // seconds to decelerate to stop
 const STUMBLE_SPEED  = 4.2;    // lurch speed when stumbling
 const STUMBLE_DUR    = 0.28;   // lurch duration seconds
 const STUMBLE_DOT    = Math.cos(20 * Math.PI / 180); // cos(20°) ≈ 0.9397 — stumble if turn > 20°
+const FALL_ANIM_DUR  = 0.5;   // seconds for capsule fall-over animation
 
 // Base claw params — scaled by difficulty
 const BASE_H_SPEED   = 1.75;  // horizontal pursuit speed (units/sec)
@@ -513,6 +514,10 @@ let   stumbling   = false;
 const stumbleVel  = new THREE.Vector3();
 let   stumbleT    = 0;
 let   walkCycle   = 0;
+let   fallAnimT      = 0;         // 0→1 over FALL_ANIM_DUR
+let   fallAnimActive = false;
+const fallAnimAxis   = new THREE.Vector3();
+const fallAnimDir    = new THREE.Vector3();
 
 // Claw 1 AI  phases: 'seeking' | 'above' | 'descending' | 'returning'
 let clawPhase     = 'seeking';
@@ -584,6 +589,7 @@ function startGame() {
   vel.set(0, 0, 0);
   lastDir.set(0, 0, 1);
   decelTimer = 0; stumbling = false; walkCycle = 0;
+  fallAnimActive = false; fallAnimT = 0;
 
   // Reset claw 1 to opposite side of player
   const px = playerGroup.position.x;
@@ -692,6 +698,12 @@ function updatePlayer(dt) {
         stumbleVel.copy(refDir).multiplyScalar(STUMBLE_SPEED);
         stumbleT  = STUMBLE_DUR;
         stumbling = true;
+        // Start fall-over animation: rotate forward around bottom-sphere center axis
+        fallAnimDir.copy(refDir);
+        // Axis perpendicular to fallDir and Y such that positive rotation tips top toward fallDir
+        fallAnimAxis.set(refDir.z, 0, -refDir.x);
+        fallAnimT      = 0;
+        fallAnimActive = true;
         // New direction is blocked — player must ride out the fall
       } else {
         // Same direction (within 20°), or decel window expired — accelerate normally
@@ -734,23 +746,42 @@ function updatePlayer(dt) {
   // Re-read speed after stumble may have changed vel
   const curSpeed = vel.length();
 
-  // Face movement direction
-  if (curSpeed > 0.1) {
-    const tAngle = Math.atan2(vel.x, vel.z);
-    playerGroup.rotation.y = lerpAngle(playerGroup.rotation.y, tAngle, dt * 12);
-  }
-
-  // Walk totter / bob
-  if (curSpeed > 0.15) {
-    walkCycle += dt * curSpeed * 3.5;
-    playerGroup.rotation.z = Math.sin(walkCycle) * 0.13;
-    playerGroup.position.y = FLOOR_Y + Math.abs(Math.sin(walkCycle * 2)) * 0.035;
+  // Fall-over animation: capsule rotates forward around bottom-sphere center axis
+  // over FALL_ANIM_DUR (0.5 s) until horizontal (π/2)
+  if (fallAnimActive) {
+    fallAnimT = Math.min(fallAnimT + dt / FALL_ANIM_DUR, 1);
+    // Quadratic ease-in — gravity-like acceleration
+    const eased = fallAnimT * fallAnimT;
+    const theta  = (Math.PI / 2) * eased;
+    // Apply rotation via quaternion to avoid Euler gimbal issues
+    const q = new THREE.Quaternion();
+    q.setFromAxisAngle(fallAnimAxis, theta);
+    playerGroup.quaternion.copy(q);
+    // Keep bottom-sphere center (local Y = -PLAYER_BODY_H/2) fixed on floor:
+    //   group_y = pivot_y + half * cos(theta)
+    const half = PLAYER_BODY_H / 2;
+    playerGroup.position.y = (FLOOR_Y - half) + half * Math.cos(theta);
+    if (fallAnimT >= 1) {
+      // Animation complete — snap upright, hand rotation back to normal code
+      fallAnimActive = false;
+      playerGroup.rotation.set(0, Math.atan2(fallAnimDir.x, fallAnimDir.z), 0);
+      playerGroup.position.y = FLOOR_Y;
+    }
   } else {
-    playerGroup.rotation.z *= (1 - dt * 8);
-    playerGroup.position.y = FLOOR_Y;
-    if (stumbling) {
-      // flail animation when stumbling
-      playerGroup.rotation.z = Math.sin(Date.now() * 0.02) * 0.35;
+    // Face movement direction
+    if (curSpeed > 0.1) {
+      const tAngle = Math.atan2(vel.x, vel.z);
+      playerGroup.rotation.y = lerpAngle(playerGroup.rotation.y, tAngle, dt * 12);
+    }
+
+    // Walk totter / bob
+    if (curSpeed > 0.15) {
+      walkCycle += dt * curSpeed * 3.5;
+      playerGroup.rotation.z = Math.sin(walkCycle) * 0.13;
+      playerGroup.position.y = FLOOR_Y + Math.abs(Math.sin(walkCycle * 2)) * 0.035;
+    } else {
+      playerGroup.rotation.z *= (1 - dt * 8);
+      playerGroup.position.y = FLOOR_Y;
     }
   }
 }
