@@ -843,6 +843,10 @@ function updatePlayer(dt) {
       risingAnimActive = false;
       playerGroup.rotation.set(0, Math.atan2(fallAnimDir.x, fallAnimDir.z), 0);
       playerGroup.position.y = FLOOR_Y;
+      // Clear decel state so post-recovery movement is never penalised by a
+      // stale timer/lastDir from before the stumble triggered.
+      decelTimer = 0;
+      lastDir.set(0, 0, 0);
     }
   } else {
     // Face movement direction
