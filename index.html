@@ -394,7 +394,7 @@ playerGroup.add(nose);
 function buildClaw(startX, startZ) {
   const clawMat = new THREE.MeshLambertMaterial({ color: 0xaaaaaa });
 
-  // Descending group: arm + fingers only — the housing stays at the ceiling
+  // Descending group: fingers only — arm is scene-level so it can stretch
   const group = new THREE.Group();
   scene.add(group);
   group.position.set(startX, CLAW_REST_Y, startZ);
@@ -407,21 +407,15 @@ function buildClaw(startX, startZ) {
   housingMesh.position.set(startX, HH, startZ);
   scene.add(housingMesh);
 
-  // Cable connecting housing bottom to the arm mount — geometry updated each frame
-  const cablePts = [
-    new THREE.Vector3(startX, HH, startZ),
-    new THREE.Vector3(startX, CLAW_REST_Y, startZ),
-  ];
-  const cableGeo  = new THREE.BufferGeometry().setFromPoints(cablePts);
-  const cableLine = new THREE.Line(cableGeo, new THREE.LineBasicMaterial({ color: 0x999999 }));
-  scene.add(cableLine);
-
+  // Arm: scene-level cylinder that stretches from housing down to the finger pivot.
+  // syncClawBase updates its scale.y and position each frame so it visually lengthens
+  // as the claw descends.
   const arm = new THREE.Mesh(
     new THREE.CylinderGeometry(0.065, 0.065, CLAW_ARM_LEN, 8),
     clawMat
   );
-  arm.position.y = -(CLAW_ARM_LEN / 2) - 0.14;
-  group.add(arm);
+  arm.position.set(startX, HH - CLAW_ARM_LEN / 2 - 0.14, startZ);
+  scene.add(arm);
 
   const fingers = [];
   for (let i = 0; i < 3; i++) {
@@ -442,12 +436,13 @@ function buildClaw(startX, startZ) {
     hook.rotation.z = -Math.PI / 2.2;
     fg.add(hook);
 
-    fg.position.y = -CLAW_ARM_LEN / 2;
-    arm.add(fg);
+    // Fingers are direct children of group (not arm), at same world position as before
+    fg.position.y = -CLAW_ARM_LEN - 0.14;
+    group.add(fg);
     fingers.push(fg);
   }
 
-  return { group, arm, fingers, housingMesh, cableGeo };
+  return { group, arm, fingers, housingMesh };
 }
 
 // Claw 1 — always active
@@ -702,16 +697,22 @@ function clampXZ(group) {
 // Backward-compat alias used by existing updateClaw below
 function clampClawXZ() { clampXZ(clawGroup); }
 
-// Keep the housing flush on the ceiling and the cable stretched from it to the arm mount
+// Keep the housing flush on the ceiling and stretch the arm from housing to finger pivot
 function syncClawBase(c) {
   const gx = c.group.position.x;
   const gz = c.group.position.z;
   c.housingMesh.position.x = gx;
   c.housingMesh.position.z = gz;
-  const pa = c.cableGeo.attributes.position;
-  pa.setXYZ(0, gx, HH, gz);
-  pa.setXYZ(1, gx, c.group.position.y, gz);
-  pa.needsUpdate = true;
+
+  // Arm top: just below the housing (HH - 0.14)
+  // Arm bottom: finger pivot (group.position.y - CLAW_ARM_LEN - 0.14)
+  // This makes the arm visually lengthen as the claw descends.
+  const armTopY    = HH - 0.14;
+  const armBottomY = c.group.position.y - CLAW_ARM_LEN - 0.14;
+  const armLength  = armTopY - armBottomY;
+  const armCenterY = (armTopY + armBottomY) / 2;
+  c.arm.scale.y    = armLength / CLAW_ARM_LEN;
+  c.arm.position.set(gx, armCenterY, gz);
 }
 
 // ════════════════════════════════════════════
@@ -910,8 +911,6 @@ function updateClaw(dt) {
         clawGroup.position.z += (dz / dist) * params.hSpeed * dt;
         clampClawXZ();
       }
-      // Gentle arm swing while seeking
-      clawArm.rotation.x = Math.sin(Date.now() * 0.0012) * 0.04;
       break;
     }
 
@@ -1034,7 +1033,6 @@ function updateClaw2(dt) {
         claw2.group.position.z += (dz / dist) * params.hSpeed * dt;
         clampXZ(claw2.group);
       }
-      claw2.arm.rotation.x = Math.sin(Date.now() * 0.0009) * 0.04;
       break;
     }
     case 'above': {
