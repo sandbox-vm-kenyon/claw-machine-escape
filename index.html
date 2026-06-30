@@ -389,15 +389,27 @@ playerGroup.add(nose);
 function buildClaw(startX, startZ) {
   const clawMat = new THREE.MeshLambertMaterial({ color: 0xaaaaaa });
 
+  // Descending group: arm + fingers only — the housing stays at the ceiling
   const group = new THREE.Group();
   scene.add(group);
   group.position.set(startX, CLAW_REST_Y, startZ);
 
-  const housing = new THREE.Mesh(
+  // Housing pinned to the top surface of the cube — does NOT descend with the arm
+  const housingMesh = new THREE.Mesh(
     new THREE.BoxGeometry(0.55, 0.28, 0.55),
     new THREE.MeshLambertMaterial({ color: 0xbbbbcc })
   );
-  group.add(housing);
+  housingMesh.position.set(startX, HH, startZ);
+  scene.add(housingMesh);
+
+  // Cable connecting housing bottom to the arm mount — geometry updated each frame
+  const cablePts = [
+    new THREE.Vector3(startX, HH, startZ),
+    new THREE.Vector3(startX, CLAW_REST_Y, startZ),
+  ];
+  const cableGeo  = new THREE.BufferGeometry().setFromPoints(cablePts);
+  const cableLine = new THREE.Line(cableGeo, new THREE.LineBasicMaterial({ color: 0x999999 }));
+  scene.add(cableLine);
 
   const arm = new THREE.Mesh(
     new THREE.CylinderGeometry(0.065, 0.065, CLAW_ARM_LEN, 8),
@@ -430,7 +442,7 @@ function buildClaw(startX, startZ) {
     fingers.push(fg);
   }
 
-  return { group, arm, fingers };
+  return { group, arm, fingers, housingMesh, cableGeo };
 }
 
 // Claw 1 — always active
@@ -604,6 +616,7 @@ function startGame() {
   const pz = playerGroup.position.z;
   clawGroup.position.set(-px * 0.5 + (Math.random()-0.5)*3, CLAW_REST_Y, -pz * 0.5 + (Math.random()-0.5)*3);
   clampClawXZ();
+  syncClawBase(claw1);
   clawCurrentY  = CLAW_REST_Y;
   clawPhase     = 'seeking';
   clawWaitTimer = 0;
@@ -612,6 +625,7 @@ function startGame() {
   if (claw2) {
     claw2.group.position.set(HW - 1, CLAW_REST_Y, HD - 1);
     c2Y = CLAW_REST_Y; c2Phase = 'seeking'; c2WaitT = 0;
+    syncClawBase(claw2);
   }
 
   shadow1.mat.opacity = 0;
@@ -677,6 +691,18 @@ function clampXZ(group) {
 }
 // Backward-compat alias used by existing updateClaw below
 function clampClawXZ() { clampXZ(clawGroup); }
+
+// Keep the housing flush on the ceiling and the cable stretched from it to the arm mount
+function syncClawBase(c) {
+  const gx = c.group.position.x;
+  const gz = c.group.position.z;
+  c.housingMesh.position.x = gx;
+  c.housingMesh.position.z = gz;
+  const pa = c.cableGeo.attributes.position;
+  pa.setXYZ(0, gx, HH, gz);
+  pa.setXYZ(1, gx, c.group.position.y, gz);
+  pa.needsUpdate = true;
+}
 
 // ════════════════════════════════════════════
 //  UPDATE — PLAYER
@@ -941,6 +967,8 @@ function updateClaw(dt) {
       break;
     }
   }
+  // Housing stays on ceiling; cable stretches to arm mount
+  syncClawBase(claw1);
 }
 
 // ════════════════════════════════════════════
@@ -1034,6 +1062,8 @@ function updateClaw2(dt) {
       break;
     }
   }
+  // Housing stays on ceiling; cable stretches to arm mount
+  syncClawBase(claw2);
 }
 
 function animate() {
