@@ -177,6 +177,7 @@ const STUMBLE_DUR    = 0.28;   // lurch duration seconds
 const STUMBLE_DOT    = Math.cos(20 * Math.PI / 180); // cos(20°) ≈ 0.9397 — stumble if turn > 20°
 const FALL_ANIM_DUR  = 0.5;   // seconds for capsule fall-over animation
 const LIE_DOWN_DUR   = 0.5;   // seconds player stays face-down after falling
+const RISE_ANIM_DUR  = 1.0;   // seconds for capsule rise animation (reverse of fall)
 
 // Base claw params — scaled by difficulty
 const BASE_H_SPEED   = 1.75;  // horizontal pursuit speed (units/sec)
@@ -521,6 +522,8 @@ const fallAnimAxis   = new THREE.Vector3();
 const fallAnimDir    = new THREE.Vector3();
 let   lyingDownActive = false;    // true during the 0.5s face-down rest after falling
 let   lyingDownT      = 0;        // elapsed time in lying-down phase
+let   risingAnimActive = false;   // true during the 1.0s rise-back-upright animation
+let   risingAnimT      = 0;       // 0→1 over RISE_ANIM_DUR
 
 // Claw 1 AI  phases: 'seeking' | 'above' | 'descending' | 'returning'
 let clawPhase     = 'seeking';
@@ -594,6 +597,7 @@ function startGame() {
   decelTimer = 0; stumbling = false; walkCycle = 0;
   fallAnimActive = false; fallAnimT = 0;
   lyingDownActive = false; lyingDownT = 0;
+  risingAnimActive = false; risingAnimT = 0;
 
   // Reset claw 1 to opposite side of player
   const px = playerGroup.position.x;
@@ -683,8 +687,8 @@ function updatePlayer(dt) {
   const speed    = vel.length();
   const isMoving = speed > 0.15;
 
-  // While stumbling or lying down: ignore all directional input
-  if (!stumbling && !lyingDownActive) {
+  // While stumbling, lying down, or rising: ignore all directional input
+  if (!stumbling && !lyingDownActive && !risingAnimActive) {
     if (hasInput) {
       // Determine reference direction for stumble check:
       //   • If still moving, compare against current velocity direction.
@@ -780,8 +784,26 @@ function updatePlayer(dt) {
     playerGroup.position.y = FLOOR_Y - half; // pivot pinned to floor
     lyingDownT += dt;
     if (lyingDownT >= LIE_DOWN_DUR) {
-      // Lying-down complete — snap back upright
-      lyingDownActive = false;
+      // Lying-down complete — begin 1.0s rise animation (reverse of fall)
+      lyingDownActive  = false;
+      risingAnimActive = true;
+      risingAnimT      = 0;
+    }
+  } else if (risingAnimActive) {
+    // Rising animation: reverse of fall — angle goes from π/2 back to 0 over RISE_ANIM_DUR
+    risingAnimT = Math.min(risingAnimT + dt / RISE_ANIM_DUR, 1);
+    // Quadratic ease-out — slow finish as player stands fully upright
+    const eased = 1 - (1 - risingAnimT) * (1 - risingAnimT);
+    const theta  = (Math.PI / 2) * (1 - eased); // π/2 → 0
+    const q = new THREE.Quaternion();
+    q.setFromAxisAngle(fallAnimAxis, theta);
+    playerGroup.quaternion.copy(q);
+    // Keep bottom-sphere center pinned to floor (same formula as fall animation)
+    const half = PLAYER_BODY_H / 2;
+    playerGroup.position.y = (FLOOR_Y - half) + half * Math.cos(theta);
+    if (risingAnimT >= 1) {
+      // Rise complete — restore normal upright orientation
+      risingAnimActive = false;
       playerGroup.rotation.set(0, Math.atan2(fallAnimDir.x, fallAnimDir.z), 0);
       playerGroup.position.y = FLOOR_Y;
     }
