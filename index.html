@@ -176,6 +176,7 @@ const STUMBLE_SPEED  = 4.2;    // lurch speed when stumbling
 const STUMBLE_DUR    = 0.28;   // lurch duration seconds
 const STUMBLE_DOT    = Math.cos(20 * Math.PI / 180); // cos(20°) ≈ 0.9397 — stumble if turn > 20°
 const FALL_ANIM_DUR  = 0.5;   // seconds for capsule fall-over animation
+const LIE_DOWN_DUR   = 0.5;   // seconds player stays face-down after falling
 
 // Base claw params — scaled by difficulty
 const BASE_H_SPEED   = 1.75;  // horizontal pursuit speed (units/sec)
@@ -518,6 +519,8 @@ let   fallAnimT      = 0;         // 0→1 over FALL_ANIM_DUR
 let   fallAnimActive = false;
 const fallAnimAxis   = new THREE.Vector3();
 const fallAnimDir    = new THREE.Vector3();
+let   lyingDownActive = false;    // true during the 0.5s face-down rest after falling
+let   lyingDownT      = 0;        // elapsed time in lying-down phase
 
 // Claw 1 AI  phases: 'seeking' | 'above' | 'descending' | 'returning'
 let clawPhase     = 'seeking';
@@ -590,6 +593,7 @@ function startGame() {
   lastDir.set(0, 0, 1);
   decelTimer = 0; stumbling = false; walkCycle = 0;
   fallAnimActive = false; fallAnimT = 0;
+  lyingDownActive = false; lyingDownT = 0;
 
   // Reset claw 1 to opposite side of player
   const px = playerGroup.position.x;
@@ -679,8 +683,8 @@ function updatePlayer(dt) {
   const speed    = vel.length();
   const isMoving = speed > 0.15;
 
-  // While stumbling: ignore all directional input — player must ride out the fall
-  if (!stumbling) {
+  // While stumbling or lying down: ignore all directional input
+  if (!stumbling && !lyingDownActive) {
     if (hasInput) {
       // Determine reference direction for stumble check:
       //   • If still moving, compare against current velocity direction.
@@ -762,8 +766,22 @@ function updatePlayer(dt) {
     const half = PLAYER_BODY_H / 2;
     playerGroup.position.y = (FLOOR_Y - half) + half * Math.cos(theta);
     if (fallAnimT >= 1) {
-      // Animation complete — snap upright, hand rotation back to normal code
-      fallAnimActive = false;
+      // Fall animation complete — begin lying-down rest phase (0.5 s face-down)
+      fallAnimActive  = false;
+      lyingDownActive = true;
+      lyingDownT      = 0;
+    }
+  } else if (lyingDownActive) {
+    // Hold the fully-horizontal (face-down) pose for LIE_DOWN_DUR seconds
+    const half  = PLAYER_BODY_H / 2;
+    const q = new THREE.Quaternion();
+    q.setFromAxisAngle(fallAnimAxis, Math.PI / 2);
+    playerGroup.quaternion.copy(q);
+    playerGroup.position.y = FLOOR_Y - half; // pivot pinned to floor
+    lyingDownT += dt;
+    if (lyingDownT >= LIE_DOWN_DUR) {
+      // Lying-down complete — snap back upright
+      lyingDownActive = false;
       playerGroup.rotation.set(0, Math.atan2(fallAnimDir.x, fallAnimDir.z), 0);
       playerGroup.position.y = FLOOR_Y;
     }
