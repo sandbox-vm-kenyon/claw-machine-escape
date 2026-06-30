@@ -179,6 +179,11 @@ const FALL_ANIM_DUR  = 0.5;   // seconds for capsule fall-over animation
 const LIE_DOWN_DUR   = 0.5;   // seconds player stays face-down after falling
 const RISE_ANIM_DUR  = 1.0;   // seconds for capsule rise animation (reverse of fall)
 
+// Front-to-back sway (pitch lean)
+const SWAY_MAX          = 0.20;  // max lean angle in radians (~11.5°)
+const SWAY_DELTA_FACTOR = 0.55;  // speed-change-per-frame → lean target multiplier
+const SWAY_SPRING       = 8;     // spring stiffness — how fast lean returns to upright
+
 // Base claw params — scaled by difficulty
 const BASE_H_SPEED   = 1.75;  // horizontal pursuit speed (units/sec)
 const BASE_V_SPEED   = 3.8;   // descent speed
@@ -537,6 +542,10 @@ let   lyingDownT      = 0;        // elapsed time in lying-down phase
 let   risingAnimActive = false;   // true during the 1.0s rise-back-upright animation
 let   risingAnimT      = 0;       // 0→1 over RISE_ANIM_DUR
 
+// Front-to-back sway state
+let   swayX     = 0;   // current front-to-back lean angle (radians; + = lean back)
+let   prevSpeed = 0;   // previous frame speed, used to compute acceleration
+
 // Claw 1 AI  phases: 'seeking' | 'above' | 'descending' | 'returning'
 let clawPhase     = 'seeking';
 let clawWaitTimer = 0;
@@ -607,6 +616,7 @@ function startGame() {
   vel.set(0, 0, 0);
   lastDir.set(0, 0, 1);
   decelTimer = 0; stumbling = false; walkCycle = 0;
+  swayX = 0; prevSpeed = 0;
   fallAnimActive = false; fallAnimT = 0;
   lyingDownActive = false; lyingDownT = 0;
   risingAnimActive = false; risingAnimT = 0;
@@ -840,14 +850,35 @@ function updatePlayer(dt) {
       playerGroup.rotation.y = lerpAngle(playerGroup.rotation.y, tAngle, dt * 12);
     }
 
+    // Front-to-back sway: lean back on acceleration, spring upright, lean forward on decel
+    const speedDelta = curSpeed - prevSpeed;
+    prevSpeed = curSpeed;
+    const swayTarget = Math.max(-SWAY_MAX, Math.min(SWAY_MAX, speedDelta * SWAY_DELTA_FACTOR));
+    swayX += (swayTarget - swayX) * Math.min(dt * SWAY_SPRING, 1);
+
+    // Build quaternion: facing (Y) × front-to-back pitch (local X) × side-to-side roll (local Z)
+    const ry = playerGroup.rotation.y;
+    const facingQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ry);
+    const localX  = new THREE.Vector3(1, 0, 0).applyQuaternion(facingQ);
+
     // Walk totter / bob
     if (curSpeed > 0.15) {
       walkCycle += dt * curSpeed * 3.5;
-      playerGroup.rotation.z = Math.sin(walkCycle) * 0.13;
       playerGroup.position.y = FLOOR_Y + Math.abs(Math.sin(walkCycle * 2)) * 0.035;
+      const totterAngle = Math.sin(walkCycle) * 0.13;
+      const localZ = new THREE.Vector3(0, 0, 1).applyQuaternion(facingQ);
+      const pitchQ = new THREE.Quaternion().setFromAxisAngle(localX, swayX);
+      const rollQ  = new THREE.Quaternion().setFromAxisAngle(localZ, totterAngle);
+      playerGroup.quaternion.copy(facingQ).multiply(pitchQ).multiply(rollQ);
     } else {
-      playerGroup.rotation.z *= (1 - dt * 8);
       playerGroup.position.y = FLOOR_Y;
+      if (Math.abs(swayX) > 0.002) {
+        const pitchQ = new THREE.Quaternion().setFromAxisAngle(localX, swayX);
+        playerGroup.quaternion.copy(facingQ).multiply(pitchQ);
+      } else {
+        swayX = 0;
+        playerGroup.quaternion.copy(facingQ);
+      }
     }
   }
 }
