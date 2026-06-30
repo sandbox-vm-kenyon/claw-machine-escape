@@ -174,6 +174,7 @@ const ACCEL          = 18;     // how fast we reach max speed
 const DECEL_TIME     = 1.0;    // seconds to decelerate to stop
 const STUMBLE_SPEED  = 4.2;    // lurch speed when stumbling
 const STUMBLE_DUR    = 0.28;   // lurch duration seconds
+const STUMBLE_DOT    = Math.cos(20 * Math.PI / 180); // cos(20°) ≈ 0.9397 — stumble if turn > 20°
 
 // Base claw params — scaled by difficulty
 const BASE_H_SPEED   = 1.75;  // horizontal pursuit speed (units/sec)
@@ -675,27 +676,25 @@ function updatePlayer(dt) {
   // While stumbling: ignore all directional input — player must ride out the fall
   if (!stumbling) {
     if (hasInput) {
+      // Determine reference direction for stumble check:
+      //   • If still moving, compare against current velocity direction.
+      //   • If nearly stopped but within the 1-second decel window, compare against lastDir.
+      //   • If the window has expired (or no prior direction), allow free movement.
+      let refDir = null;
       if (isMoving) {
-        // Require full stop before changing direction.
-        // Compare new input against current velocity direction (not lastDir).
-        const movDir = vel.clone().normalize();
-        const dot    = movDir.dot(input);
-        if (dot < 0.85) {
-          // Significant direction change while still moving → fall in previous direction
-          // 0.85 ≈ cos(32°) — catches 45° diagonal key additions/removals (cos 45° ≈ 0.707)
-          stumbleVel.copy(movDir).multiplyScalar(STUMBLE_SPEED);
-          stumbleT  = STUMBLE_DUR;
-          stumbling = true;
-          // New direction is blocked — stumble overrides
-        } else {
-          // Continuing in roughly the same direction — accelerate normally
-          const targetVel = input.clone().multiplyScalar(MAX_SPEED);
-          vel.lerp(targetVel, Math.min(dt * ACCEL, 1));
-          lastDir.copy(input);
-          decelTimer = 0;
-        }
+        refDir = vel.clone().normalize();
+      } else if (decelTimer > 0 && decelTimer < DECEL_TIME && lastDir.length() > 0.05) {
+        refDir = lastDir.clone().normalize();
+      }
+
+      if (refDir !== null && refDir.dot(input) < STUMBLE_DOT) {
+        // Direction change > 20° within the 1-second decel window → stumble
+        stumbleVel.copy(refDir).multiplyScalar(STUMBLE_SPEED);
+        stumbleT  = STUMBLE_DUR;
+        stumbling = true;
+        // New direction is blocked — player must ride out the fall
       } else {
-        // Fully stopped (or nearly) — freely accept new direction
+        // Same direction (within 20°), or decel window expired — accelerate normally
         const targetVel = input.clone().multiplyScalar(MAX_SPEED);
         vel.lerp(targetVel, Math.min(dt * ACCEL, 1));
         lastDir.copy(input);
