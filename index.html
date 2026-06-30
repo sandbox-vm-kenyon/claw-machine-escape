@@ -687,8 +687,8 @@ function updatePlayer(dt) {
   const speed    = vel.length();
   const isMoving = speed > 0.15;
 
-  // While stumbling, lying down, or rising: ignore all directional input
-  if (!stumbling && !lyingDownActive && !risingAnimActive) {
+  // While stumbling, falling, lying down, or rising: ignore all directional input
+  if (!stumbling && !fallAnimActive && !lyingDownActive && !risingAnimActive) {
     if (hasInput) {
       // Determine reference direction for stumble check:
       //   • If still moving, compare against current velocity direction.
